@@ -116,33 +116,19 @@ static int oa_process_received_chunk(struct open_alliance* oa, struct oa_rx_chun
     return 0;
 }
 
-static int oa_transfer_chunks(struct open_alliance* oa, bool force){
+static int oa_transfer_chunks(struct open_alliance* oa){
     struct oa_tx_chunk_t* chunk_tx;
     struct oa_rx_chunk_t* chunk_rx;
     struct spi_transfer t = { 0 };
     u32 chunks_to_send = 0;
     u32 offset;
-    bool repeat = false;
     int i;
     int ret;
-
-    if (kfifo_len(&oa->tx_chunks_fifo)){
-        if(oa->tx_credits) {
-            chunks_to_send = min(kfifo_len(&oa->tx_chunks_fifo), oa->tx_credits);
-        }else {
-            chunks_to_send = 1;
-            repeat = true;
-        }
-    }
-    if(oa->rx_available > chunks_to_send)
-        chunks_to_send = oa->rx_available;
-    if(!chunks_to_send && force) // one chunk forced by int
-        chunks_to_send = 1;
-    if(chunks_to_send > OA_TRX_BUFFER_CHUNKS)
-        chunks_to_send = OA_TRX_BUFFER_CHUNKS;
-    if(!chunks_to_send)
-        return 0;
-
+    
+    chunks_to_send = min(kfifo_len(&oa->tx_chunks_fifo), oa->tx_credits);   // chunks available to send
+    chunks_to_send = max(chunks_to_send, oa->rx_available);                 // chunks available to receive
+    chunks_to_send = max(1, chunks_to_send);                                // send at least one chunk
+    chunks_to_send = min(chunks_to_send, OA_TRX_BUFFER_CHUNKS);             // send at max buffer size
 
     for(i = 0; i < chunks_to_send; i++){
         offset = i * OA_CHUNK_SIZE;
@@ -163,7 +149,6 @@ static int oa_transfer_chunks(struct open_alliance* oa, bool force){
         chunk_tx->header.bits.parity = oa_calc_parity (chunk_tx->header.value);
         chunk_tx->header.value = oa_convert_tx_chunk_header(chunk_tx->header.bits);
     }
-
 
     t.rx_buf = oa->rx_data;
     t.tx_buf = oa->tx_data;
@@ -188,37 +173,43 @@ static int oa_transfer_chunks(struct open_alliance* oa, bool force){
         }
     }
 
-    if(oa->cb_tx_finished)
-        oa->cb_tx_finished(oa->cb_tx_finished_context);
-    if(repeat)
-        wake_up_process(oa->spi_thread);
-
     return 0;
+}
+
+static bool oa_should_transfer(struct open_alliance* oa){
+    bool val;
+    // trigerred by interrupt
+    mutex_lock(&oa->int_lock);
+    val = oa->int_received;
+    oa->int_received = false;
+    mutex_unlock(&oa->int_lock);
+    // trigerred by rx available
+    val |= oa->rx_available > 0;
+    // trigerred by tx available
+    val |= oa->tx_credits && kfifo_len(&oa->tx_chunks_fifo);
+    return val;
 }
 
 static int oa_spi_transfer_thread(void *pv)
 {
     struct open_alliance *oa = pv;
     int ret;
-    bool val;
-
+    
     while (!kthread_should_stop()) {
         schedule_timeout_interruptible(msecs_to_jiffies(5000) + 1);
 
-        mutex_lock(&oa->int_lock);
-        val = oa->int_received;
-        oa->int_received = false;
-        mutex_unlock(&oa->int_lock);
-
         mutex_lock(&oa->spi_lock);
-        while (oa->rx_available || kfifo_len(&oa->tx_chunks_fifo) || val) {
-            ret = oa_transfer_chunks(oa, val);
+        while (oa_should_transfer(oa)) {
+            ret = oa_transfer_chunks(oa);
             if(ret < 0)
                 OA_DEBUG("OA: transfer error %d", ret);
-            
-            val = false;
+            if(kthread_should_stop())
+                break;
         }
         mutex_unlock(&oa->spi_lock);
+        
+        if(oa->cb_tx_finished)
+            oa->cb_tx_finished(oa->cb_tx_finished_context);
     }
 
     return 0;
@@ -429,12 +420,10 @@ int oa_write(struct open_alliance *oa, struct sk_buff *txb){
 }
 
 int oa_process_interrupt(struct open_alliance *oa){
-    OA_DEBUG("OA: interrupt received")
     if(oa->config_done) {
         mutex_lock(&oa->int_lock);
         oa->int_received = true;
         mutex_unlock(&oa->int_lock);
-
         wake_up_process(oa->spi_thread);
     }
     return 0;
