@@ -20,6 +20,6 @@ load:
 	dtc -O dtb -o device_tree.dtbo device_tree.dts
 	dtoverlay device_tree.dtbo
 	insmod ./$(TARGET_MODULE).ko
-
+	
 endif
 

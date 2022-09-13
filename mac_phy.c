@@ -165,8 +165,7 @@ static int mac_phy_configure_phy(void * context){
         return ret;
     // enable communication, filter adresses and append crc
     val = REG_CONTROL0_TXEN | REG_CONTROL0_RXEN |
-          REG_CONTROL0_FCSA;
-    //REG_CONTROL0_ADRF
+          REG_CONTROL0_FCSA | REG_CONTROL0_ADRF;
     ret = oa_write_reg(dev_priv->oa, REG_CONTROL0_MMS, REG_CONTROL0, val);
     if (ret < 0)
         return ret;
@@ -193,7 +192,7 @@ static int mac_phy_net_open(struct net_device *net_dev) {
         return ret;
     enable_irq(dev_priv->spidev->irq);
     netif_start_queue(net_dev);
-    OA_DEBUG("MACPHY net open done");
+    OA_DEBUG("MACPHY: net device opened");
     return 0;
 }
 
@@ -201,11 +200,10 @@ static int mac_phy_net_stop(struct net_device *net_dev) {
     struct mac_phy_net_priv *net_priv = netdev_priv(net_dev);
     struct mac_phy_dev_priv *dev_priv = net_priv->dev_priv;
 
-    OA_DEBUG("MACPHY closing net device");
-
     netif_stop_queue(net_priv->netdev);
     flush_work(&net_priv->tx_work);
     disable_irq(dev_priv->spidev->irq);
+    OA_DEBUG("MACPHY: net device closed");
     return oa_net_stop(net_priv->dev_priv->oa);
 }
 
@@ -221,7 +219,7 @@ static void mac_phy_tx_work(struct work_struct *work) {
         if (skb) {
             ret = oa_write(dev_priv->oa, skb);
             if (ret < 0)
-                netdev_err(net_priv->netdev, "Frame write error: %d\n", ret);
+                netdev_err(net_priv->netdev, "MACPHY: Frame write error %d\n", ret);
 
             dev_kfree_skb(skb);
         }
@@ -233,8 +231,6 @@ static netdev_tx_t mac_phy_start_xmit(struct sk_buff *skb, struct net_device *de
     struct mac_phy_dev_priv *dev_priv = net_priv->dev_priv;
     netdev_tx_t netdev_ret = NETDEV_TX_OK;
     u32 tx_space_needed = skb->len;
-
-    OA_DEBUG("Transmitting socket, len / space : %d / %d", skb->len, dev_priv->tx_space)
 
     spin_lock(&dev_priv->locK_tx_space);
     if (tx_space_needed > dev_priv->tx_space) {
@@ -251,16 +247,10 @@ static netdev_tx_t mac_phy_start_xmit(struct sk_buff *skb, struct net_device *de
     return netdev_ret;
 }
 
-static int mac_phy_do_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd){
-    OA_DEBUG("Received command : %d", cmd);
-    return 0;
-}
-
 static const struct net_device_ops mac_phy_netdev_ops = {
         .ndo_open        = mac_phy_net_open,
         .ndo_stop        = mac_phy_net_stop,
         .ndo_start_xmit        = mac_phy_start_xmit,
-        .ndo_do_ioctl = mac_phy_do_ioctl,
         .ndo_set_mac_address    = mac_phy_set_mac_address,
         .ndo_validate_addr    = eth_validate_addr,
 };
@@ -349,7 +339,7 @@ static int mac_phy_register_netdev(struct mac_phy_dev_priv *dev_priv) {
 static int mac_phy_probe(struct spi_device *spi) {
     struct mac_phy_dev_priv *dev_priv;
     int ret;
-    OA_DEBUG("MACPHY probe started");
+    OA_DEBUG("MACPHY: probe started");
     dev_priv = devm_kzalloc(&spi->dev, sizeof(struct mac_phy_dev_priv), GFP_KERNEL);
     if (!dev_priv)
         return -ENOMEM;
@@ -364,7 +354,7 @@ static int mac_phy_probe(struct spi_device *spi) {
         return ret;
 
     ret = mac_phy_register_netdev(dev_priv);
-    OA_DEBUG("MACPHY probe finished %d", ret)
+    OA_DEBUG("MACPHY: probe finished %d", ret)
 
     return ret;
 }

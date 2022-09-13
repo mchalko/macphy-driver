@@ -168,7 +168,7 @@ static int oa_transfer_chunks(struct open_alliance* oa, bool force){
     t.rx_buf = oa->rx_data;
     t.tx_buf = oa->tx_data;
     t.len = chunks_to_send * OA_CHUNK_SIZE;
-    OA_DEBUG("OA : transferring %d chunks", chunks_to_send)
+
     ret = spi_sync_transfer(oa->spidev, &t, 1);
     if (ret < 0)
         return ret;
@@ -211,10 +211,12 @@ static int oa_spi_transfer_thread(void *pv)
         mutex_unlock(&oa->int_lock);
 
         mutex_lock(&oa->spi_lock);
-        if (oa->rx_available || kfifo_len(&oa->tx_chunks_fifo) || val) {
+        while (oa->rx_available || kfifo_len(&oa->tx_chunks_fifo) || val) {
             ret = oa_transfer_chunks(oa, val);
             if(ret < 0)
-                OA_DEBUG("Open Alliance transfer error %d", ret);
+                OA_DEBUG("OA: transfer error %d", ret);
+            
+            val = false;
         }
         mutex_unlock(&oa->spi_lock);
     }
@@ -337,7 +339,6 @@ int oa_write_reg(struct open_alliance *oa, u8 mms, u16 addr, u32 val)
 
     if(be32_to_cpu(ctrl_rx->reg_val) != val)
         ret = -EIO;
-    OA_DEBUG("OA Write reg : %d %d %d resulted in %d", mms, addr, val, ret);
     mutex_unlock(&oa->spi_lock);
     return ret;
 }
@@ -428,7 +429,7 @@ int oa_write(struct open_alliance *oa, struct sk_buff *txb){
 }
 
 int oa_process_interrupt(struct open_alliance *oa){
-    OA_DEBUG("OA : interrupt received")
+    OA_DEBUG("OA: interrupt received")
     if(oa->config_done) {
         mutex_lock(&oa->int_lock);
         oa->int_received = true;
