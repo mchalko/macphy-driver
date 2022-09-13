@@ -1,10 +1,3 @@
-// SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
-/**
- * Open Alliance SPI protocol driver for 10BASE-T1x Ethernet MAC-PHY
- *
- * Copyright 2021 Analog Devices Inc.
- */
-
 #ifndef __OPEN_ALLIANCE_H
 #define __OPEN_ALLIANCE_H
 
@@ -73,7 +66,7 @@
 
 #define OA_FIFO_CHUNK_NUM           1024 // number of chunks to buffer
 
-#define OA_TRX_BUFFER_CHUNKS        32
+#define OA_TRX_BUFFER_CHUNKS        32ul
 #define OA_TRX_BUFFER_SIZE          (OA_TRX_BUFFER_CHUNKS * OA_CHUNK_SIZE) // max possible size of spi write (until phy memory is filled)
 
 #define OA_FRAME_ASSEMBLY_CHUNKS    32ul

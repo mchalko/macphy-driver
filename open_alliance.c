@@ -127,7 +127,7 @@ static int oa_transfer_chunks(struct open_alliance* oa){
     
     chunks_to_send = min(kfifo_len(&oa->tx_chunks_fifo), oa->tx_credits);   // chunks available to send
     chunks_to_send = max(chunks_to_send, oa->rx_available);                 // chunks available to receive
-    chunks_to_send = max(1, chunks_to_send);                                // send at least one chunk
+    chunks_to_send = max(1ul, chunks_to_send);                                // send at least one chunk
     chunks_to_send = min(chunks_to_send, OA_TRX_BUFFER_CHUNKS);             // send at max buffer size
 
     for(i = 0; i < chunks_to_send; i++){
