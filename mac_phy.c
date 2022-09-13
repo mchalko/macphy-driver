@@ -75,26 +75,21 @@ struct macphy_dev_conf{
     u32 plca_node_count;
 };
 
-struct macphy_net_priv {
-    struct macphy_dev_priv *dev_priv;
+struct macphy_priv {
+    struct spi_device *spidev;
     struct net_device *netdev;
+    struct open_alliance *oa;
+    struct macphy_dev_conf conf;
     struct work_struct tx_work;
     struct work_struct set_rx_mode_work;
     struct sk_buff_head txq;
-    u32 flags;
-};
-
-struct macphy_dev_priv {
-    struct macphy_net_priv *net_priv;
-    struct spi_device *spidev;
-    struct open_alliance *oa;
-    struct macphy_dev_conf conf;
     spinlock_t lock_tx_work;
     spinlock_t lock_set_rx_mode_work;
+    u32 flags;
     u32 tx_space;
 };
 
-static int macphy_read_config(struct macphy_dev_priv* priv){
+static int macphy_read_config(struct macphy_priv* priv){
     int ret;
     struct fwnode_handle *fwnode = dev_fwnode(&priv->spidev->dev);
 	priv->conf.plca_enabled = fwnode_property_present(fwnode, "plca-enabled");
@@ -105,13 +100,12 @@ static int macphy_read_config(struct macphy_dev_priv* priv){
         ret = fwnode_property_read_u32(fwnode, "plca-node-count", &priv->conf.plca_node_count);
         if(ret < 0)
             return ret;
-        OA_DEBUG("USING PLCAAA %d %d", priv->conf.plca_id, priv->conf.plca_node_count)
     }
     return 0;
 }
 
 static irqreturn_t macphy_irq(int irq, void *p) {
-    struct macphy_dev_priv *priv = p;
+    struct macphy_priv *priv = p;
 
     oa_process_interrupt(priv->oa);
 
@@ -144,7 +138,7 @@ static int macphy_write_mac_address(struct open_alliance* oa, int mac_nr, u8 *ad
 }
 
 static int macphy_set_mac_address(struct net_device *netdev, void *addr) {
-    struct macphy_net_priv *net_priv = netdev_priv(netdev);
+    struct macphy_priv *priv = netdev_priv(netdev);
     struct sockaddr *sa = addr;
     u8 mask[ETH_ALEN];
 
@@ -157,11 +151,11 @@ static int macphy_set_mac_address(struct net_device *netdev, void *addr) {
     ether_addr_copy(netdev->dev_addr, sa->sa_data);
     memset(mask, 0xFF, ETH_ALEN);
 
-    return macphy_write_mac_address(net_priv->dev_priv->oa, MACPHY_DEV_MAC_ADDR_SLOT, netdev->dev_addr, mask);
+    return macphy_write_mac_address(priv->oa, MACPHY_DEV_MAC_ADDR_SLOT, netdev->dev_addr, mask);
 }
 
-static int macphy_init_mac(struct macphy_net_priv *net_priv) {
-    struct net_device *netdev = net_priv->netdev;
+static int macphy_init_mac(struct macphy_priv *priv) {
+    struct net_device *netdev = priv->netdev;
     u8 mask[ETH_ALEN];
     u8 mac[ETH_ALEN];
     int ret;
@@ -169,13 +163,13 @@ static int macphy_init_mac(struct macphy_net_priv *net_priv) {
     memset(mask, 0xFF, ETH_ALEN);
     memset(mac, 0xFF, ETH_ALEN);
 
-    ret = macphy_write_mac_address(net_priv->dev_priv->oa, MACPHY_DEV_MAC_ADDR_SLOT, netdev->dev_addr, mask);
+    ret = macphy_write_mac_address(priv->oa, MACPHY_DEV_MAC_ADDR_SLOT, netdev->dev_addr, mask);
     if (ret < 0) {
         netdev_err(netdev, "Could not set MAC address: %pM, %d\n", netdev->dev_addr, ret);
         return ret;
     }
 
-    ret = macphy_write_mac_address(net_priv->dev_priv->oa, MACPHY_BROADCAST_MAC_ADDR_SLOT, mac, mask);
+    ret = macphy_write_mac_address(priv->oa, MACPHY_BROADCAST_MAC_ADDR_SLOT, mac, mask);
     if (ret < 0) {
         netdev_err(netdev, "Could not set Broadcast MAC address: %d\n", ret);
         return ret;
@@ -185,41 +179,41 @@ static int macphy_init_mac(struct macphy_net_priv *net_priv) {
 }
 
 static int macphy_configure_phy(void * context){
-    struct macphy_dev_priv *dev_priv = context;
+    struct macphy_priv *priv = context;
     int ret;
     u32 val;
 
     // configure mac address
-    ret = macphy_init_mac(dev_priv->net_priv);
+    ret = macphy_init_mac(priv);
 
     if (ret < 0)
         return ret;
     // enable communication, filter adresses and append crc
     val = REG_CONTROL0_TXEN | REG_CONTROL0_RXEN |
           REG_CONTROL0_FCSA | REG_CONTROL0_ADRF;
-    ret = oa_write_reg(dev_priv->oa, REG_CONTROL0_MMS, REG_CONTROL0, val);
+    ret = oa_write_reg(priv->oa, REG_CONTROL0_MMS, REG_CONTROL0, val);
     if (ret < 0)
         return ret;
     // unjabber timer and noise immunity enhancement
     val = REG_TWEAKS1_ENIE | REG_TWEAKS1_UNJT;
-    ret = oa_reg_set_bits(dev_priv->oa, REG_TWEAKS1_MMS, REG_TWEAKS1, val, val);
+    ret = oa_reg_set_bits(priv->oa, REG_TWEAKS1_MMS, REG_TWEAKS1, val, val);
     if (ret < 0)
         return ret;
     // enable link
     val = REG_PHYCON_LINKCTRL;
-    ret = oa_write_reg(dev_priv->oa, REG_PHYCON_MMS, REG_PHYCON, val);
+    ret = oa_write_reg(priv->oa, REG_PHYCON_MMS, REG_PHYCON, val);
     if (ret < 0)
         return ret;
     // use plca
-    if(dev_priv->conf.plca_enabled){
+    if(priv->conf.plca_enabled){
         val = REG_PLCAC0_ENA;
-        ret = oa_write_reg(dev_priv->oa, REG_PLCAC0_MMS, REG_PLCAC0, val);
+        ret = oa_write_reg(priv->oa, REG_PLCAC0_MMS, REG_PLCAC0, val);
         if (ret < 0)
             return ret;
 
-        val = FIELD_PREP(REG_PLCAC1_NODE_COUNT, dev_priv->conf.plca_node_count) |
-              FIELD_PREP(REG_PLCAC1_NODE_ID, dev_priv->conf.plca_id);
-        ret = oa_write_reg(dev_priv->oa, REG_PLCAC1_MMS, REG_PLCAC1, val);
+        val = FIELD_PREP(REG_PLCAC1_NODE_COUNT, priv->conf.plca_node_count) |
+              FIELD_PREP(REG_PLCAC1_NODE_ID, priv->conf.plca_id);
+        ret = oa_write_reg(priv->oa, REG_PLCAC1_MMS, REG_PLCAC1, val);
         if (ret < 0)
             return ret;
     }
@@ -227,44 +221,40 @@ static int macphy_configure_phy(void * context){
 }
 
 static int macphy_net_open(struct net_device *net_dev) {
-    struct macphy_net_priv *net_priv = netdev_priv(net_dev);
-    struct macphy_dev_priv *dev_priv = net_priv->dev_priv;
+    struct macphy_priv *priv = netdev_priv(net_dev);
     int ret;
 
-    ret = oa_net_open(dev_priv->oa, macphy_configure_phy, dev_priv);
+    ret = oa_net_open(priv->oa, macphy_configure_phy, priv);
     if (ret < 0)
         return ret;
-    enable_irq(dev_priv->spidev->irq);
+    enable_irq(priv->spidev->irq);
     netif_start_queue(net_dev);
-    OA_DEBUG("MACPHY: net device opened");
+
     return 0;
 }
 
 static int macphy_net_stop(struct net_device *net_dev) {
-    struct macphy_net_priv *net_priv = netdev_priv(net_dev);
-    struct macphy_dev_priv *dev_priv = net_priv->dev_priv;
-
-    netif_stop_queue(net_priv->netdev);
-    flush_work(&net_priv->tx_work);
-    flush_work(&net_priv->set_rx_mode_work);
-    disable_irq(dev_priv->spidev->irq);
-    OA_DEBUG("MACPHY: net device closed");
-    return oa_net_stop(net_priv->dev_priv->oa);
+    struct macphy_priv *priv = netdev_priv(net_dev);
+    
+    netif_stop_queue(priv->netdev);
+    flush_work(&priv->tx_work);
+    flush_work(&priv->set_rx_mode_work);
+    disable_irq(priv->spidev->irq);
+    return oa_net_stop(priv->oa);
 }
 
 static void macphy_tx_work(struct work_struct *work) {
-    struct macphy_net_priv *net_priv = container_of(work, struct macphy_net_priv, tx_work);
-    struct macphy_dev_priv *dev_priv = net_priv->dev_priv;
+    struct macphy_priv *priv = container_of(work, struct macphy_priv, tx_work);
     struct sk_buff *skb;
     int ret;
 
-    while (!skb_queue_empty(&net_priv->txq)) {
-        skb = skb_dequeue(&net_priv->txq);
+    while (!skb_queue_empty(&priv->txq)) {
+        skb = skb_dequeue(&priv->txq);
 
         if (skb) {
-            ret = oa_write(dev_priv->oa, skb);
+            ret = oa_write(priv->oa, skb);
             if (ret < 0)
-                netdev_err(net_priv->netdev, "MACPHY: Frame write error %d\n", ret);
+                netdev_err(priv->netdev, "MACPHY: Frame write error %d\n", ret);
 
             dev_kfree_skb(skb);
         }
@@ -272,49 +262,46 @@ static void macphy_tx_work(struct work_struct *work) {
 }
 
 static netdev_tx_t macphy_start_xmit(struct sk_buff *skb, struct net_device *dev) {
-    struct macphy_net_priv *net_priv = netdev_priv(dev);
-    struct macphy_dev_priv *dev_priv = net_priv->dev_priv;
+    struct macphy_priv *priv = netdev_priv(dev);
     netdev_tx_t netdev_ret = NETDEV_TX_OK;
     u32 tx_space_needed = skb->len;
 
-    spin_lock(&dev_priv->lock_tx_work);
-    if (tx_space_needed > dev_priv->tx_space) {
+    spin_lock(&priv->lock_tx_work);
+    if (tx_space_needed > priv->tx_space) {
         netif_stop_queue(dev);
         netdev_ret = NETDEV_TX_BUSY;
     } else {
-        dev_priv->tx_space -= tx_space_needed;
-        skb_queue_tail(&net_priv->txq, skb);
+        priv->tx_space -= tx_space_needed;
+        skb_queue_tail(&priv->txq, skb);
     }
-    spin_unlock(&dev_priv->lock_tx_work);
+    spin_unlock(&priv->lock_tx_work);
 
-    schedule_work(&net_priv->tx_work);
+    schedule_work(&priv->tx_work);
 
     return netdev_ret;
 }
 
 static void macphy_set_rx_mode_work(struct work_struct *work)
 {
-    struct macphy_net_priv *net_priv = container_of(work, struct macphy_net_priv, set_rx_mode_work);
-    struct macphy_dev_priv *dev_priv = net_priv->dev_priv;
+    struct macphy_priv *priv = container_of(work, struct macphy_priv, set_rx_mode_work);
     u32 mask;
 
     mask = REG_CONTROL0_ADRF;
-    oa_reg_set_bits(dev_priv->oa, REG_CONTROL0_MMS, REG_CONTROL0, mask,
-                      (net_priv->flags & IFF_PROMISC) ? mask : 0);
+    oa_reg_set_bits(priv->oa, REG_CONTROL0_MMS, REG_CONTROL0, mask,
+                      (priv->flags & IFF_PROMISC) ? mask : 0);
 }
 
 
 static void macphy_set_rx_mode(struct net_device *dev)
 {
-    struct macphy_net_priv *net_priv = netdev_priv(dev);
-    struct macphy_dev_priv *dev_priv = net_priv->dev_priv;
+    struct macphy_priv *priv = netdev_priv(dev);
 
-    spin_lock(&dev_priv->lock_set_rx_mode_work);
+    spin_lock(&priv->lock_set_rx_mode_work);
 
-    net_priv->flags = dev->flags;
-    schedule_work(&net_priv->set_rx_mode_work);
+    priv->flags = dev->flags;
+    schedule_work(&priv->set_rx_mode_work);
 
-    spin_unlock(&dev_priv->lock_set_rx_mode_work);
+    spin_unlock(&priv->lock_set_rx_mode_work);
 }
 
 static const struct net_device_ops macphy_netdev_ops = {
@@ -326,115 +313,99 @@ static const struct net_device_ops macphy_netdev_ops = {
         .ndo_validate_addr    = eth_validate_addr,
 };
 
-static void macphy_remove_open_alliance(void *data) {
-    struct open_alliance* oa = data;
-    oa_delete(oa);
-}
-
 static void macphy_tx_finished_cb(void* context){
-    struct macphy_dev_priv *dev_priv = context;
+    struct macphy_priv *priv = context;
 
-    spin_lock(&dev_priv->lock_tx_work);
+    spin_lock(&priv->lock_tx_work);
 
-    dev_priv->tx_space = oa_write_space(dev_priv->oa);
-    if(dev_priv->tx_space > 0)
-        netif_wake_queue(dev_priv->net_priv->netdev);
+    priv->tx_space = oa_write_space(priv->oa);
+    if(priv->tx_space > 0)
+        netif_wake_queue(priv->netdev);
 
-    spin_unlock(&dev_priv->lock_tx_work);
-}
-
-static int macphy_init_netdev(struct macphy_dev_priv *dev_priv) {
-    struct device *dev = &dev_priv->spidev->dev;
-    const struct spi_device_id *dev_id = spi_get_device_id(dev_priv->spidev);
-    struct macphy_net_priv *net_priv;
-    struct net_device *netdev;
-    const u8 *mac_addr;
-    u8 mac[ETH_ALEN];
-
-    netdev = devm_alloc_etherdev(dev, sizeof(*net_priv));
-    if (!netdev)
-        return -ENOMEM;
-
-    net_priv = netdev_priv(netdev);
-    net_priv->netdev = netdev;
-    net_priv->dev_priv = dev_priv;
-    dev_priv->net_priv = net_priv;
-    SET_NETDEV_DEV(netdev, dev);
-
-    mac_addr = device_get_mac_address(dev, mac, ETH_ALEN);
-    if (!mac_addr) {
-        netdev_err(netdev, "MAC address invalid: %pM\n", mac);
-        return -EINVAL;
-    }
-    ether_addr_copy(netdev->dev_addr, mac);
-
-    netdev->irq = dev_priv->spidev->irq;
-    INIT_WORK(&net_priv->tx_work, macphy_tx_work);
-    INIT_WORK(&net_priv->set_rx_mode_work, macphy_set_rx_mode_work);
-    skb_queue_head_init(&net_priv->txq);
-
-    netdev->if_port = IF_PORT_10BASET;
-    netdev->netdev_ops = &macphy_netdev_ops;
-    snprintf(net_priv->netdev->name, IFNAMSIZ, "%s-%u", dev_id->name,
-             dev_priv->spidev->chip_select);
-
-    dev_priv->oa = oa_init(dev_priv->spidev, netdev);
-    if (IS_ERR(dev_priv->oa)) {
-        printk(KERN_INFO "open alliance init ERROR\n");
-        return -EFAULT;
-    }
-    oa_set_callback_tx_finished(dev_priv->oa, macphy_tx_finished_cb, dev_priv);
-    dev_priv->tx_space = oa_write_space(dev_priv->oa);
-
-    return devm_add_action_or_reset(dev, macphy_remove_open_alliance, dev_priv->oa);
-}
-
-static int macphy_register_netdev(struct macphy_dev_priv *dev_priv) {
-    struct device *dev = &dev_priv->spidev->dev;
-    int ret;
-
-    ret = devm_register_netdev(dev, dev_priv->net_priv->netdev);
-    if (ret < 0) {
-        dev_err(dev, "failed to register network device\n");
-        return ret;
-    }
-
-    ret = devm_request_threaded_irq(dev, dev_priv->spidev->irq, NULL, macphy_irq,
-                                     IRQF_TRIGGER_LOW | IRQF_ONESHOT, dev_name(dev), dev_priv);
-    if(ret < 0)
-        return ret;
-
-    disable_irq(dev_priv->spidev->irq);
-    return 0;
+    spin_unlock(&priv->lock_tx_work);
 }
 
 static int macphy_probe(struct spi_device *spi) {
-    struct macphy_dev_priv *dev_priv;
+    struct macphy_priv *priv;
+    struct net_device *net;
+    u8 mac[ETH_ALEN];
     int ret;
-    OA_DEBUG("MACPHY: probe started");
-    dev_priv = devm_kzalloc(&spi->dev, sizeof(struct macphy_dev_priv), GFP_KERNEL);
-    if (!dev_priv)
-        return -ENOMEM;
-
-    dev_priv->spidev = spi;
+    
+    net = alloc_etherdev(sizeof(struct macphy_priv));
+    if (!net){
+        ret = -ENOMEM;
+        goto error_return;
+    }
+    
+    priv = netdev_priv(net);
+    spi_set_drvdata(spi, priv);	
+    
     spi->bits_per_word = 8;
-
-    ret = macphy_read_config(dev_priv);
+    priv->netdev = net;
+    priv->spidev = spi;
+    spin_lock_init(&priv->lock_tx_work);
+    spin_lock_init(&priv->lock_set_rx_mode_work);
+    INIT_WORK(&priv->tx_work, macphy_tx_work);
+    INIT_WORK(&priv->set_rx_mode_work, macphy_set_rx_mode_work);
+    skb_queue_head_init(&priv->txq);
+    
+    net->irq = spi->irq;
+    net->if_port = IF_PORT_10BASET;
+    net->netdev_ops = &macphy_netdev_ops;
+    SET_NETDEV_DEV(net, &spi->dev);
+    
+    // read configuration
+    ret = macphy_read_config(priv);
     if (ret < 0)
-        return ret;
+        goto error_free_net;
+    // configure interface mac address and name
+    if(!device_get_mac_address(&spi->dev, mac, ETH_ALEN)){
+        ret = -EINVAL;
+        goto error_free_net;
+    }
+    ether_addr_copy(net->dev_addr, mac);
+    snprintf(net->name, IFNAMSIZ, "%s-%u", spi_get_device_id(spi)->name,
+             spi->chip_select);
+    // configure open alliance module
+    priv->oa = oa_init(spi, net);
+    if (IS_ERR(priv->oa)){
+        ret = -EFAULT;
+        goto error_free_net;
+    }
+    oa_set_callback_tx_finished(priv->oa, macphy_tx_finished_cb, priv);
+    priv->tx_space = oa_write_space(priv->oa);
+    // register interrupt and net dev
+    ret = register_netdev(net);
+    if (ret < 0) 
+        goto error_free_oa;
+    
+    ret = request_threaded_irq( spi->irq, NULL, macphy_irq, IRQF_TRIGGER_LOW | IRQF_ONESHOT, dev_name(&spi->dev), priv);
+    if(ret < 0)
+        goto error_unregister_net;
 
-    spin_lock_init(&dev_priv->lock_tx_work);
-    spin_lock_init(&dev_priv->lock_set_rx_mode_work);
-
-    ret = macphy_init_netdev(dev_priv);
-    if (ret < 0)
-        return ret;
-
-    ret = macphy_register_netdev(dev_priv);
-    OA_DEBUG("MACPHY: probe finished %d", ret)
-
+    disable_irq(spi->irq);
+    return 0;
+error_unregister_net:
+	unregister_netdev(net);
+error_free_oa:
+    oa_delete(priv->oa);
+error_free_net:
+    free_netdev(net);
+error_return:
     return ret;
 }
+
+static int macphy_remove(struct spi_device *spi){
+	struct macphy_priv *priv = spi_get_drvdata(spi);
+
+	free_irq(spi->irq, priv);
+    unregister_netdev(priv->netdev);
+	oa_delete(priv->oa);
+	free_netdev(priv->netdev);
+
+	return 0;
+}
+
 
 MODULE_DEVICE_TABLE(of, macphy_match_table);
 
@@ -444,6 +415,7 @@ static struct spi_driver macphy_driver = {
                 .of_match_table = macphy_match_table,
         },
         .probe = macphy_probe,
+        .remove = macphy_remove,
         .id_table = macphy_spi_id,
 };
 

@@ -66,10 +66,10 @@
 
 #define OA_FIFO_CHUNK_NUM           1024 // number of chunks to buffer
 
-#define OA_TRX_BUFFER_CHUNKS        32ul
+#define OA_TRX_BUFFER_CHUNKS        32
 #define OA_TRX_BUFFER_SIZE          (OA_TRX_BUFFER_CHUNKS * OA_CHUNK_SIZE) // max possible size of spi write (until phy memory is filled)
 
-#define OA_FRAME_ASSEMBLY_CHUNKS    32ul
+#define OA_FRAME_ASSEMBLY_CHUNKS    32
 #define OA_FRAME_ASSEMBLY_SIZE      (OA_FRAME_ASSEMBLY_CHUNKS * OA_CHUNK_DATA_SIZE)
 
 #define OA_DEBUG(...) printk(KERN_INFO __VA_ARGS__);

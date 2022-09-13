@@ -110,7 +110,7 @@ static int oa_process_received_chunk(struct open_alliance* oa, struct oa_rx_chun
         memcpy (skb_put (skb, frame_size), oa->frame_assembly, frame_size);
         skb->protocol = eth_type_trans (skb, oa->netdev);
 
-        return netif_receive_skb (skb);
+        return netif_rx_ni (skb);
     }
 
     return 0;
@@ -127,8 +127,8 @@ static int oa_transfer_chunks(struct open_alliance* oa){
     
     chunks_to_send = min(kfifo_len(&oa->tx_chunks_fifo), oa->tx_credits);   // chunks available to send
     chunks_to_send = max(chunks_to_send, oa->rx_available);                 // chunks available to receive
-    chunks_to_send = max(1ul, chunks_to_send);                                // send at least one chunk
-    chunks_to_send = min(chunks_to_send, OA_TRX_BUFFER_CHUNKS);             // send at max buffer size
+    chunks_to_send = max_t(unsigned long, 1ul, chunks_to_send);                                // send at least one chunk
+    chunks_to_send = min_t(unsigned long, chunks_to_send, OA_TRX_BUFFER_CHUNKS);             // send at max buffer size
 
     for(i = 0; i < chunks_to_send; i++){
         offset = i * OA_CHUNK_SIZE;
